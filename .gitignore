@@ -1,0 +1,20 @@
+# Sensitive configuration files (DO NOT COMMIT!)
+config.json
+
+# Cache and temporary files
+exams_structure.json
+response_old.xml
+response_new.xml
+
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+.venv/
