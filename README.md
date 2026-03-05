@@ -59,15 +59,15 @@ The script supports two modes of operation:
 #### Check Mode (Default)
 Checks for changes, saves data, and sends notifications:
 ```bash
-python check_exams.py
+python main.py
 # or explicitly:
-python check_exams.py check
+python main.py check
 ```
 
 #### Bot Mode
 Starts an interactive Telegram bot that listens for commands **and automatically checks for exam updates every 10 minutes**:
 ```bash
-python check_exams.py bot
+python main.py bot
 ```
 
 **Important**: The bot only responds to the user specified in `config.json` (chat_id). Other users will receive an "unauthorized" message.
@@ -81,7 +81,7 @@ Once the bot is running, you can interact with it via Telegram:
 
 ## Files
 
-- `check_exams.py` - Main script with CLI and bot functionality
+- `main.py` - Main script with CLI and bot functionality
 - `config.json` - Your credentials (ignored by Git)
 - `config.example.json` - Template for configuration
 - `exams_structure.json` - Cached exam data (auto-generated)
@@ -120,7 +120,7 @@ The bot mode enables both interactive queries and automatic monitoring via Teleg
 
 ```bash
 # Start the bot (it will run continuously)
-python check_exams.py bot
+python main.py bot
 ```
 
 The bot will stay active and respond to commands. Press `Ctrl+C` to stop.
@@ -150,7 +150,7 @@ For continuous operation, set up the bot as a systemd service:
    Type=simple
    User=YOUR_USERNAME
    WorkingDirectory=/path/to/hisinone-check-update
-   ExecStart=/usr/bin/python3 /path/to/hisinone-check-update/check_exams.py bot
+   ExecStart=/usr/bin/python3 /path/to/hisinone-check-update/main.py bot
    Restart=always
    RestartSec=10
 
@@ -200,7 +200,7 @@ If you only want automatic checks without the interactive bot functionality, use
 crontab -e
 
 # Run every 10 minutes
-*/10 * * * * cd /path/to/hisinone-check-update && python3 check_exams.py check
+*/10 * * * * cd /path/to/hisinone-check-update && python3 main.py check
 ```
 
 **Note**: With this option, you won't be able to use interactive commands like `/fetch`.
