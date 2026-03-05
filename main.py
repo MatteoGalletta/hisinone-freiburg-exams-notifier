@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 import time
+import argparse
 
 # --- Configuration ---
 # Load credentials from config.json
@@ -41,6 +42,9 @@ PASSWORD = config['hisinone']['password']
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = config['telegram']['bot_token']
 TELEGRAM_CHAT_ID = config['telegram']['chat_id']
+
+# Bot state
+LAST_UPDATE_ID_FILE = "last_update_id.json"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0",
@@ -156,6 +160,62 @@ def compare_structures(old_exams, new_exams):
         return {'added': added, 'removed': removed, 'grade_changes': grade_changes}
     return None
 
+def send_telegram_message(chat_id, message, parse_mode="Markdown"):
+    """Send a generic Telegram message. Returns message_id on success, None on failure."""
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ Telegram bot token not configured")
+        return None
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message
+    }
+    
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            return result.get('result', {}).get('message_id')
+        else:
+            print(f"⚠️ Failed to send Telegram message: {response.status_code}")
+            print(f"Response: {response.text}")
+            return None
+    except Exception as e:
+        print(f"⚠️ Error sending Telegram message: {e}")
+        return None
+
+def edit_telegram_message(chat_id, message_id, new_text, parse_mode="Markdown"):
+    """Edit an existing Telegram message."""
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ Telegram bot token not configured")
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": new_text
+    }
+    
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return True
+        else:
+            print(f"⚠️ Failed to edit Telegram message: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"⚠️ Error editing Telegram message: {e}")
+        return False
+
 def send_telegram_notification(changes, current_exams):
     """Send Telegram notification with exam structure and changes."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -201,23 +261,194 @@ def send_telegram_notification(changes, current_exams):
     
     message += "```"
     
-    # Send message via Telegram API
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+    send_telegram_message(TELEGRAM_CHAT_ID, message)
+
+def get_telegram_updates(offset=None):
+    """Get updates from Telegram bot."""
+    if not TELEGRAM_BOT_TOKEN:
+        return None
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    params = {
+        "timeout": 30,
+        "allowed_updates": ["message"]
     }
     
+    if offset:
+        params["offset"] = offset
+    
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.get(url, params=params, timeout=35)
         if response.status_code == 200:
-            print("\n✅ Telegram notification sent successfully!")
+            return response.json()
         else:
-            print(f"\n⚠️ Failed to send Telegram notification: {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"⚠️ Failed to get Telegram updates: {response.status_code}")
+            return None
     except Exception as e:
-        print(f"\n⚠️ Error sending Telegram notification: {e}")
+        print(f"⚠️ Error getting Telegram updates: {e}")
+        return None
+
+def load_last_update_id():
+    """Load the last processed update ID."""
+    if os.path.exists(LAST_UPDATE_ID_FILE):
+        try:
+            with open(LAST_UPDATE_ID_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get('last_update_id', 0)
+        except:
+            return 0
+    return 0
+
+def save_last_update_id(update_id):
+    """Save the last processed update ID."""
+    with open(LAST_UPDATE_ID_FILE, 'w') as f:
+        json.dump({'last_update_id': update_id}, f)
+
+def format_exam_tree_message(exams):
+    """Format exam tree as a Telegram message (plain text, no Markdown)."""
+    message = "📚 HISinOne Exam Structure\n\n"
+    
+    for exam in exams:
+        indent = "  " * (exam["level"] - 1)
+        name_with_grade = exam['name']
+        if exam.get('grade'):
+            name_with_grade = f"{exam['name']} (Grade: {exam['grade']})"
+        message += f"{indent}├── {name_with_grade}\n"
+    
+    return message
+
+def handle_telegram_command(command, chat_id, message_id):
+    """Handle incoming Telegram commands."""
+    print(f"📨 Received command: {command} from chat_id: {chat_id}")
+    
+    # Check if user is authorized
+    if str(chat_id) != str(TELEGRAM_CHAT_ID):
+        print(f"⚠️ Unauthorized access attempt from chat_id: {chat_id}")
+        send_telegram_message(chat_id, "❌ You are not authorized to use this bot.")
+        return
+    
+    if command == '/start':
+        response = "👋 Welcome to HISinOne Exam Notifier!\n\nAvailable commands:\n/fetch - Get current exam structure\n/help - Show this help message"
+        send_telegram_message(chat_id, response)
+        
+    elif command == '/help':
+        response = "📚 *HISinOne Exam Notifier Commands*\n\n/fetch - Fetch and display current exam structure\n/help - Show this help message"
+        send_telegram_message(chat_id, response)
+        
+    elif command == '/fetch':
+        # Send initial "processing" message
+        status_message_id = send_telegram_message(chat_id, "⏳ Fetching exam data from HISinOne...")
+        
+        # Login and fetch exam tree
+        session = login_and_get_session()
+        if not session:
+            if status_message_id:
+                edit_telegram_message(chat_id, status_message_id, "❌ Login failed. Please check the configuration.")
+            else:
+                send_telegram_message(chat_id, "❌ Login failed. Please check the configuration.")
+            return
+        
+        current_exams = fetch_exam_tree(session)
+        if not current_exams:
+            if status_message_id:
+                edit_telegram_message(chat_id, status_message_id, "❌ Failed to fetch exam tree. Please try again later.")
+            else:
+                send_telegram_message(chat_id, "❌ Failed to fetch exam tree. Please try again later.")
+            return
+        
+        # Format and edit the message with the exam tree
+        message = format_exam_tree_message(current_exams)
+        if status_message_id:
+            edit_telegram_message(chat_id, status_message_id, message, parse_mode=None)
+            print("✅ Updated message with exam tree for user")
+        else:
+            send_telegram_message(chat_id, message, parse_mode=None)
+            print("✅ Sent exam tree to user")
+    else:
+        response = f"❓ Unknown command: {command}\n\nUse /help to see available commands."
+        send_telegram_message(chat_id, response)
+
+def telegram_bot_loop():
+    """Main loop for Telegram bot - listens for commands and performs periodic checks."""
+    print("🤖 Starting Telegram bot...")
+    print("Bot is now listening for commands and will check for exam updates every 10 minutes.")
+    print("Press Ctrl+C to stop.\n")
+    
+    last_update_id = load_last_update_id()
+    last_check_time = time.time()
+    CHECK_INTERVAL = 600  # 10 minutes in seconds
+    
+    while True:
+        try:
+            # Check if it's time for periodic exam check
+            current_time = time.time()
+            if current_time - last_check_time >= CHECK_INTERVAL:
+                print(f"\n⏰ [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Running periodic exam check...")
+                
+                try:
+                    # Login and fetch exam tree
+                    session = login_and_get_session()
+                    if session:
+                        current_exams = fetch_exam_tree(session)
+                        if current_exams:
+                            # Load previous structure and compare
+                            previous_exams = load_previous_structure()
+                            changes = compare_structures(previous_exams, current_exams)
+                            
+                            # Save current structure
+                            save_exam_structure(current_exams)
+                            
+                            # Notify about changes
+                            print("\n📚 Exam Structure:")
+                            print_exam_structure(current_exams)
+                            notify_changes(changes)
+                            
+                            # Send Telegram notification if there are changes
+                            send_telegram_notification(changes, current_exams)
+                        else:
+                            print("❌ Failed to fetch exam tree during periodic check")
+                    else:
+                        print("❌ Login failed during periodic check")
+                except Exception as e:
+                    print(f"⚠️ Error during periodic check: {e}")
+                
+                last_check_time = current_time
+                print(f"✅ Periodic check complete. Next check in 10 minutes.\n")
+            
+            # Get updates from Telegram
+            updates = get_telegram_updates(offset=last_update_id + 1 if last_update_id else None)
+            
+            if not updates or not updates.get('ok'):
+                time.sleep(1)
+                continue
+            
+            # Process each update
+            for update in updates.get('result', []):
+                update_id = update.get('update_id')
+                
+                if update_id:
+                    last_update_id = max(last_update_id, update_id)
+                    save_last_update_id(last_update_id)
+                
+                # Extract message
+                message = update.get('message')
+                if not message:
+                    continue
+                
+                chat_id = message.get('chat', {}).get('id')
+                message_id = message.get('message_id')
+                text = message.get('text', '').strip()
+                
+                # Process commands
+                if text.startswith('/'):
+                    handle_telegram_command(text, chat_id, message_id)
+            
+        except KeyboardInterrupt:
+            print("\n\n👋 Stopping bot...")
+            break
+        except Exception as e:
+            print(f"⚠️ Error in bot loop: {e}")
+            time.sleep(5)
 
 def notify_changes(changes):
     """Notify user about changes in the exam structure."""
@@ -306,7 +537,8 @@ def extract_view_state(html_content):
     # If still not found, return None and we'll use a fallback
     return None
 
-def run_workflow():
+def login_and_get_session():
+    """Perform login and return authenticated session."""
     # 1. Start a Session
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -326,10 +558,13 @@ def run_workflow():
     # 3. Verify Login Success
     if "Abmelden" in response.text or "Logout" in response.text:
         print("✅ Login successful!")
+        return session
     else:
         print("❌ Login failed. Check credentials or ajax-token.")
-        return
+        return None
 
+def fetch_exam_tree(session):
+    """Fetch and extract exam tree from HISinOne. Returns list of exams or None."""
     # 4. Get the Exam Page to Extract Flow Key and ViewState
     exam_page_res = session.get(EXAM_PAGE_BASE, allow_redirects=True)
     
@@ -377,7 +612,6 @@ def run_workflow():
     
     # Perform the expand all request
     exam_res = session.post(data_url, headers=ajax_headers, data=expand_data)
-    # print(exam_res.text)
     
     # 7. Extract and Print Tree
     content = exam_res.text
@@ -391,12 +625,23 @@ def run_workflow():
     else:
         html_part = content
     
-    # print(html_part)
     # Extract exam structure
     current_exams = extract_exam_structure(html_part)
     
     if not current_exams:
         print("Empty tree. This usually means the Flow Key (e1s1) has expired.")
+        return None
+    
+    return current_exams
+
+def run_workflow():
+    """Original workflow: fetch, compare, save and notify."""
+    session = login_and_get_session()
+    if not session:
+        return
+    
+    current_exams = fetch_exam_tree(session)
+    if not current_exams:
         return
     
     # Load previous structure and compare
@@ -417,4 +662,22 @@ def run_workflow():
     send_telegram_notification(changes, current_exams)
 
 if __name__ == "__main__":
-    run_workflow()
+    parser = argparse.ArgumentParser(
+        description="HISinOne Exam Checker - Monitor and fetch exam results from HISinOne",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        'command',
+        nargs='?',
+        default='check',
+        choices=['check', 'bot'],
+        help='Command to execute: check (default) - check for changes, update cache and send notifications, bot - start Telegram bot to listen for commands'
+    )
+    
+    args = parser.parse_args()
+    
+    if args.command == 'bot':
+        telegram_bot_loop()
+    else:
+        run_workflow()
